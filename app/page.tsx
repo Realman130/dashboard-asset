@@ -2,7 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
-import { Save, RefreshCw, Wallet, Building2, TrendingUp, PiggyBank, Gamepad2, AlertCircle } from "lucide-react";
+import { 
+  Save, RefreshCw, Wallet, TrendingUp, AlertCircle, 
+  Plus, Trash2, PiggyBank, Building2, Gamepad2, Coins 
+} from "lucide-react";
 
 // --- CẤU HÌNH SUPABASE ---
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -10,29 +13,34 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 // --- KIỂU DỮ LIỆU ---
+interface Item {
+  id: number;
+  name: string;
+  amount: number;
+}
+
 interface FinanceData {
   cash: number;
-  bank_balance: number;
+  bank_accounts: Item[];
   salary: number;
   other_income: number;
-  rent_cost: number;
-  phone_cost: number;
-  debt_interest: number;
+  fixed_expenses: Item[];
 }
 
 export default function Home() {
   const [loading, setLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  
+  // State quản lý dữ liệu
   const [data, setData] = useState<FinanceData>({
     cash: 0,
-    bank_balance: 0,
+    bank_accounts: [],
     salary: 0,
     other_income: 0,
-    rent_cost: 0,
-    phone_cost: 0,
-    debt_interest: 0,
+    fixed_expenses: [],
   });
 
-  // --- HÀM LOAD DỮ LIỆU ---
+  // --- LOAD DATA ---
   useEffect(() => {
     fetchData();
   }, []);
@@ -50,213 +58,335 @@ export default function Home() {
     } else if (dbData) {
       setData({
         cash: dbData.cash || 0,
-        bank_balance: dbData.bank_balance || 0,
+        bank_accounts: dbData.bank_accounts || [],
         salary: dbData.salary || 0,
         other_income: dbData.other_income || 0,
-        rent_cost: dbData.rent_cost || 0,
-        phone_cost: dbData.phone_cost || 0,
-        debt_interest: dbData.debt_interest || 0,
+        fixed_expenses: dbData.fixed_expenses || [],
       });
     }
     setLoading(false);
   };
 
-  // --- HÀM LƯU DỮ LIỆU ---
+  // --- SAVE DATA ---
   const handleSave = async () => {
-    setLoading(true);
+    setIsSaving(true);
     const { error } = await supabase
       .from("finance_tracker")
-      .update(data)
+      .update({
+        cash: data.cash,
+        salary: data.salary,
+        other_income: data.other_income,
+        bank_accounts: data.bank_accounts,
+        fixed_expenses: data.fixed_expenses,
+        updated_at: new Date(),
+      })
       .eq("user_identifier", "default_user");
 
     if (error) {
-      alert("Lưu thất bại!");
+      alert("Lỗi khi lưu!");
       console.error(error);
-    } else {
-      alert("Đã cập nhật dữ liệu thành công!");
-    }
-    setLoading(false);
+    } 
+    // Giả lập delay một chút cho mượt
+    setTimeout(() => setIsSaving(false), 500);
   };
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    setData((prev) => ({
+  // --- XỬ LÝ NHẬP LIỆU CƠ BẢN ---
+  const handleBasicChange = (field: keyof FinanceData, value: number) => {
+    setData(prev => ({ ...prev, [field]: value }));
+  };
+
+  // --- XỬ LÝ DANH SÁCH ĐỘNG (NGÂN HÀNG / CHI PHÍ) ---
+  const updateItem = (field: 'bank_accounts' | 'fixed_expenses', id: number, key: 'name' | 'amount', value: any) => {
+    setData(prev => ({
       ...prev,
-      [name]: Number(value),
+      [field]: prev[field].map(item => item.id === id ? { ...item, [key]: value } : item)
     }));
   };
 
-  // --- LOGIC TÍNH TOÁN ---
-  const totalAssets = data.cash + data.bank_balance;
-  const totalIncome = data.salary + data.other_income;
-  const totalFixedExpense = data.rent_cost + data.phone_cost + data.debt_interest;
-  const remaining = totalIncome - totalFixedExpense;
-
-  // --- PHÂN BỔ GIỎ (Dựa trên số tiền còn lại sau khi trừ chi phí cố định) ---
-  // Logic tham khảo: 
-  // - 40% cho Chi tiêu sinh hoạt (Ăn uống, đi lại...)
-  // - 30% cho Đầu tư
-  // - 20% cho Tiết kiệm dài hạn
-  // - 10% cho Giải trí
-  const jarLiving = remaining > 0 ? remaining * 0.4 : 0;
-  const jarInvest = remaining > 0 ? remaining * 0.3 : 0;
-  const jarSavings = remaining > 0 ? remaining * 0.2 : 0;
-  const jarPlay = remaining > 0 ? remaining * 0.1 : 0;
-
-  // Format tiền tệ VNĐ
-  const formatVND = (amount: number) => {
-    return new Intl.NumberFormat("vi-VN", { style: "currency", currency: "VND" }).format(amount);
+  const addItem = (field: 'bank_accounts' | 'fixed_expenses') => {
+    const newItem: Item = { id: Date.now(), name: field === 'bank_accounts' ? 'Ngân hàng mới' : 'Khoản chi mới', amount: 0 };
+    setData(prev => ({ ...prev, [field]: [...prev[field], newItem] }));
   };
 
-  return (
-    <div className="min-h-screen bg-gray-50 p-4 sm:p-8 font-sans text-gray-800">
-      <div className="max-w-3xl mx-auto bg-white shadow-xl rounded-2xl overflow-hidden border border-gray-100">
-        
-        {/* HEADER */}
-        <div className="bg-blue-600 p-6 text-white flex justify-between items-center">
-          <div>
-            <h1 className="text-2xl font-bold">Quản Lý Tài Chính</h1>
-            <p className="text-blue-100 text-sm opacity-90">Cập nhật realtime trên mọi thiết bị</p>
-          </div>
-          <button 
-            onClick={fetchData} 
-            className="p-2 bg-blue-500 rounded-full hover:bg-blue-400 transition"
-            title="Làm mới dữ liệu"
-          >
-            <RefreshCw size={20} className={loading ? "animate-spin" : ""} />
-          </button>
-        </div>
+  const removeItem = (field: 'bank_accounts' | 'fixed_expenses', id: number) => {
+    setData(prev => ({ ...prev, [field]: prev[field].filter(item => item.id !== id) }));
+  };
 
-        <div className="p-6 space-y-8">
+  // --- TÍNH TOÁN TỔNG ---
+  const totalBank = data.bank_accounts.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  const totalAssets = (Number(data.cash) || 0) + totalBank;
+  
+  const totalIncome = (Number(data.salary) || 0) + (Number(data.other_income) || 0);
+  const totalExpense = data.fixed_expenses.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  
+  const remaining = totalIncome - totalExpense;
+
+  // --- PHÂN BỔ GIỎ (Trên số dư) ---
+  const safeRemaining = remaining > 0 ? remaining : 0;
+  const jarLiving = safeRemaining * 0.4;
+  const jarInvest = safeRemaining * 0.3;
+  const jarSavings = safeRemaining * 0.2;
+  const jarPlay = safeRemaining * 0.1;
+
+  const formatVND = (amount: number) => new Intl.NumberFormat("vi-VN", { style: "currency", currency: "VND" }).format(amount);
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans pb-20">
+      
+      {/* HEADER */}
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex justify-between items-center">
+          <div className="flex items-center gap-2">
+            <div className="bg-blue-600 p-2 rounded-lg text-white">
+              <Coins size={24} />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold text-slate-900">Finance Dashboard</h1>
+              <p className="text-xs text-slate-500 hidden sm:block">Quản lý dòng tiền cá nhân</p>
+            </div>
+          </div>
           
-          {/* PHẦN 1: TÀI SẢN HIỆN CÓ */}
-          <section className="bg-blue-50 p-5 rounded-xl border border-blue-100">
-            <h2 className="text-lg font-semibold text-blue-800 mb-4 flex items-center gap-2">
-              <Wallet className="w-5 h-5" /> Tổng Tài Sản Hiện Tại
-            </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <InputGroup label="Tiền mặt" name="cash" value={data.cash} onChange={handleChange} />
-              <InputGroup label="Tài khoản Ngân hàng" name="bank_balance" value={data.bank_balance} onChange={handleChange} />
-            </div>
-            <div className="mt-4 pt-4 border-t border-blue-200 flex justify-between items-center">
-              <span className="font-medium text-blue-900">Tổng tài sản:</span>
-              <span className="text-xl font-bold text-blue-700">{formatVND(totalAssets)}</span>
-            </div>
-          </section>
+          <div className="flex items-center gap-3">
+            <button onClick={fetchData} className="p-2 text-slate-500 hover:bg-slate-100 rounded-full transition" title="Làm mới">
+              <RefreshCw size={20} className={loading ? "animate-spin" : ""} />
+            </button>
+            <button 
+              onClick={handleSave} 
+              disabled={isSaving}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-white transition shadow-sm
+                ${isSaving ? 'bg-blue-400 cursor-wait' : 'bg-blue-600 hover:bg-blue-700 active:scale-95'}
+              `}
+            >
+              <Save size={18} /> {isSaving ? "Đang lưu..." : "Lưu dữ liệu"}
+            </button>
+          </div>
+        </div>
+      </header>
 
-          {/* PHẦN 2: THU NHẬP & CHI CỐ ĐỊNH */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            
-            {/* THU NHẬP */}
-            <section className="bg-green-50 p-5 rounded-xl border border-green-100">
-              <h2 className="text-lg font-semibold text-green-800 mb-4 flex items-center gap-2">
-                <TrendingUp className="w-5 h-5" /> Thu Nhập Tháng
-              </h2>
-              <div className="space-y-3">
-                <InputGroup label="Lương cố định" name="salary" value={data.salary} onChange={handleChange} />
-                <InputGroup label="Khoản thu khác" name="other_income" value={data.other_income} onChange={handleChange} />
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        
+        {/* GRID LAYOUT: 12 Columns */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          
+          {/* CỘT 1: TÀI SẢN (Chiếm 4 phần) */}
+          <div className="lg:col-span-4 space-y-6">
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+                <h2 className="font-bold text-slate-700 flex items-center gap-2">
+                  <Wallet className="text-blue-500" size={20} /> Tài Sản Hiện Có
+                </h2>
+                <span className="text-blue-600 font-bold">{formatVND(totalAssets)}</span>
               </div>
-              <div className="mt-4 text-right font-bold text-green-700">{formatVND(totalIncome)}</div>
-            </section>
+              
+              <div className="p-5 space-y-4">
+                {/* Tiền mặt */}
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 uppercase">Tiền mặt</label>
+                  <input 
+                    type="number" 
+                    value={data.cash}
+                    onChange={(e) => handleBasicChange('cash', Number(e.target.value))}
+                    className="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-lg font-mono text-lg focus:ring-2 focus:ring-blue-500 outline-none transition"
+                  />
+                </div>
 
-            {/* CHI CỐ ĐỊNH */}
-            <section className="bg-red-50 p-5 rounded-xl border border-red-100">
-              <h2 className="text-lg font-semibold text-red-800 mb-4 flex items-center gap-2">
-                <AlertCircle className="w-5 h-5" /> Chi Phí Cố Định
-              </h2>
-              <div className="space-y-3">
-                <InputGroup label="Tiền nhà" name="rent_cost" value={data.rent_cost} onChange={handleChange} />
-                <InputGroup label="Tiền điện thoại/Net" name="phone_cost" value={data.phone_cost} onChange={handleChange} />
-                <InputGroup label="Lãi trả nợ" name="debt_interest" value={data.debt_interest} onChange={handleChange} />
+                {/* Danh sách Ngân hàng */}
+                <div>
+                  <div className="flex justify-between items-end mb-2">
+                    <label className="text-xs font-semibold text-slate-500 uppercase">Tài khoản ngân hàng</label>
+                    <button onClick={() => addItem('bank_accounts')} className="text-xs flex items-center gap-1 text-blue-600 hover:underline">
+                      <Plus size={14} /> Thêm bank
+                    </button>
+                  </div>
+                  
+                  <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1 custom-scrollbar">
+                    {data.bank_accounts.map((item) => (
+                      <div key={item.id} className="flex gap-2 items-center group">
+                        <input 
+                          type="text" 
+                          value={item.name}
+                          onChange={(e) => updateItem('bank_accounts', item.id, 'name', e.target.value)}
+                          className="w-1/3 p-2 text-sm bg-white border border-slate-200 rounded-md focus:border-blue-500 outline-none"
+                          placeholder="Tên NH"
+                        />
+                        <input 
+                          type="number" 
+                          value={item.amount}
+                          onChange={(e) => updateItem('bank_accounts', item.id, 'amount', Number(e.target.value))}
+                          className="flex-1 p-2 text-sm font-mono bg-white border border-slate-200 rounded-md focus:border-blue-500 outline-none text-right"
+                        />
+                        <button 
+                          onClick={() => removeItem('bank_accounts', item.id)}
+                          className="p-2 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
-              <div className="mt-4 text-right font-bold text-red-700">{formatVND(totalFixedExpense)}</div>
-            </section>
+            </div>
           </div>
 
-          {/* PHẦN 3: KẾT QUẢ & PHÂN BỔ */}
-          <section className="bg-gray-800 text-white p-6 rounded-xl shadow-lg">
-            <div className="flex justify-between items-center border-b border-gray-600 pb-4 mb-4">
-              <span className="text-gray-300">Dòng tiền còn lại (Thu - Chi):</span>
-              <span className={`text-2xl font-bold ${remaining >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                {formatVND(remaining)}
-              </span>
-            </div>
-
-            <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">
-              Gợi ý phân bổ chi tiêu (Dựa trên số dư)
-            </h3>
+          {/* CỘT 2: THU & CHI (Chiếm 4 phần) */}
+          <div className="lg:col-span-4 space-y-6">
             
-            <div className="grid grid-cols-2 gap-4">
-              <JarItem 
-                icon={<Wallet className="text-yellow-400" />} 
-                label="Sinh hoạt phí (40%)" 
-                value={jarLiving} 
-                sub="Ăn uống, xăng xe, chợ búa"
-              />
-              <JarItem 
-                icon={<PiggyBank className="text-pink-400" />} 
-                label="Tiết kiệm (20%)" 
-                value={jarSavings} 
-                sub="Quỹ dự phòng, mục tiêu lớn"
-              />
-              <JarItem 
-                icon={<Building2 className="text-blue-400" />} 
-                label="Đầu tư (30%)" 
-                value={jarInvest} 
-                sub="Chứng khoán, Vàng, Coin"
-              />
-              <JarItem 
-                icon={<Gamepad2 className="text-purple-400" />} 
-                label="Giải trí (10%)" 
-                value={jarPlay} 
-                sub="Cafe, mua sắm cá nhân"
-              />
+            {/* Thu Nhập */}
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200">
+              <div className="p-4 border-b border-slate-100 bg-green-50/50 flex justify-between items-center">
+                <h2 className="font-bold text-green-800 flex items-center gap-2">
+                  <TrendingUp className="text-green-600" size={20} /> Thu Nhập
+                </h2>
+                <span className="text-green-700 font-bold">{formatVND(totalIncome)}</span>
+              </div>
+              <div className="p-5 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                   <div>
+                      <label className="text-xs font-semibold text-slate-400">Lương cứng</label>
+                      <input 
+                        type="number" value={data.salary} 
+                        onChange={(e) => handleBasicChange('salary', Number(e.target.value))}
+                        className="w-full p-2 border rounded-md text-right font-mono" 
+                      />
+                   </div>
+                   <div>
+                      <label className="text-xs font-semibold text-slate-400">Thu nhập khác</label>
+                      <input 
+                        type="number" value={data.other_income} 
+                        onChange={(e) => handleBasicChange('other_income', Number(e.target.value))}
+                        className="w-full p-2 border rounded-md text-right font-mono" 
+                      />
+                   </div>
+                </div>
+              </div>
             </div>
-          </section>
 
-          {/* BUTTON SAVE */}
-          <button
-            onClick={handleSave}
-            disabled={loading}
-            className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg transition transform active:scale-95 flex justify-center items-center gap-2"
-          >
-            {loading ? "Đang lưu..." : <><Save size={20} /> CẬP NHẬT DỮ LIỆU</>}
-          </button>
+            {/* Chi Phí Cố Định */}
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 flex-1">
+              <div className="p-4 border-b border-slate-100 bg-red-50/50 flex justify-between items-center">
+                <h2 className="font-bold text-red-800 flex items-center gap-2">
+                  <AlertCircle className="text-red-600" size={20} /> Chi Cố Định
+                </h2>
+                <span className="text-red-700 font-bold">{formatVND(totalExpense)}</span>
+              </div>
+              
+              <div className="p-5">
+                 <div className="flex justify-between items-end mb-2">
+                    <label className="text-xs font-semibold text-slate-500 uppercase">Danh sách khoản chi</label>
+                    <button onClick={() => addItem('fixed_expenses')} className="text-xs flex items-center gap-1 text-red-600 hover:underline">
+                      <Plus size={14} /> Thêm khoản chi
+                    </button>
+                  </div>
+
+                  <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1 custom-scrollbar">
+                    {data.fixed_expenses.map((item) => (
+                      <div key={item.id} className="flex gap-2 items-center group">
+                        <input 
+                          type="text" 
+                          value={item.name}
+                          onChange={(e) => updateItem('fixed_expenses', item.id, 'name', e.target.value)}
+                          className="w-1/3 p-2 text-sm bg-white border border-slate-200 rounded-md focus:border-red-500 outline-none"
+                          placeholder="Khoản chi..."
+                        />
+                        <input 
+                          type="number" 
+                          value={item.amount}
+                          onChange={(e) => updateItem('fixed_expenses', item.id, 'amount', Number(e.target.value))}
+                          className="flex-1 p-2 text-sm font-mono bg-white border border-slate-200 rounded-md focus:border-red-500 outline-none text-right"
+                        />
+                        <button 
+                          onClick={() => removeItem('fixed_expenses', item.id)}
+                          className="p-2 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+              </div>
+            </div>
+
+          </div>
+
+          {/* CỘT 3: TỔNG KẾT & PHÂN BỔ (Chiếm 4 phần) */}
+          <div className="lg:col-span-4 space-y-6">
+            
+            {/* Card Tổng Kết */}
+            <div className="bg-slate-900 text-white rounded-xl shadow-lg p-6 relative overflow-hidden">
+              <div className="absolute top-0 right-0 p-4 opacity-10">
+                <Coins size={100} />
+              </div>
+              <p className="text-slate-400 text-sm font-medium mb-1">DÒNG TIỀN DƯ (Cashflow)</p>
+              <div className={`text-4xl font-bold mb-4 ${remaining >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {formatVND(remaining)}
+              </div>
+              
+              <div className="h-1 w-full bg-slate-700 rounded-full mb-4">
+                 <div 
+                  className="h-1 bg-green-500 rounded-full transition-all duration-500" 
+                  style={{ width: totalIncome > 0 ? `${(remaining/totalIncome)*100}%` : '0%' }}
+                 ></div>
+              </div>
+              <p className="text-xs text-slate-400">
+                *Số tiền này đã trừ hết chi phí cố định, sẵn sàng để phân bổ.
+              </p>
+            </div>
+
+            {/* Card Phân Bổ */}
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+              <h3 className="font-bold text-slate-700 mb-4 border-b pb-2">Kế Hoạch Phân Bổ</h3>
+              <div className="grid grid-cols-1 gap-4">
+                
+                <JarRow 
+                  icon={<Wallet className="text-yellow-500" />} 
+                  color="bg-yellow-100 text-yellow-700"
+                  label="Sinh hoạt phí (40%)" 
+                  value={jarLiving} 
+                />
+                <JarRow 
+                  icon={<Building2 className="text-blue-500" />} 
+                  color="bg-blue-100 text-blue-700"
+                  label="Đầu tư (30%)" 
+                  value={jarInvest} 
+                />
+                <JarRow 
+                  icon={<PiggyBank className="text-pink-500" />} 
+                  color="bg-pink-100 text-pink-700"
+                  label="Tiết kiệm (20%)" 
+                  value={jarSavings} 
+                />
+                <JarRow 
+                  icon={<Gamepad2 className="text-purple-500" />} 
+                  color="bg-purple-100 text-purple-700"
+                  label="Giải trí (10%)" 
+                  value={jarPlay} 
+                />
+
+              </div>
+            </div>
+
+          </div>
 
         </div>
-      </div>
+      </main>
     </div>
   );
 }
 
-// --- COMPONENTS CON ---
-function InputGroup({ label, name, value, onChange }: { label: string, name: string, value: number, onChange: any }) {
+// Sub-component cho dòng phân bổ
+function JarRow({ icon, label, value, color }: { icon: any, label: string, value: number, color: string }) {
   return (
-    <div>
-      <label className="block text-xs font-semibold text-gray-500 mb-1">{label}</label>
-      <input
-        type="number"
-        name={name}
-        value={value}
-        onChange={onChange}
-        className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none text-right font-mono"
-        placeholder="0"
-      />
-    </div>
-  );
-}
-
-function JarItem({ icon, label, value, sub }: { icon: any, label: string, value: number, sub: string }) {
-  return (
-    <div className="bg-gray-700 p-3 rounded-lg border border-gray-600">
-      <div className="flex items-center gap-2 mb-1">
-        {icon}
-        <span className="font-semibold text-sm">{label}</span>
+    <div className="flex items-center justify-between p-3 rounded-lg hover:bg-slate-50 transition border border-transparent hover:border-slate-200">
+      <div className="flex items-center gap-3">
+        <div className={`p-2 rounded-lg ${color}`}>
+          {icon}
+        </div>
+        <span className="text-sm font-medium text-slate-600">{label}</span>
       </div>
-      <div className="text-lg font-bold text-white mb-1">
-        {new Intl.NumberFormat("vi-VN", { style: "currency", currency: "VND" }).format(value)}
-      </div>
-      <div className="text-xs text-gray-400">{sub}</div>
+      <span className="font-bold text-slate-800 font-mono">
+        {new Intl.NumberFormat("vi-VN").format(value)} đ
+      </span>
     </div>
   );
 }

@@ -3,20 +3,44 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { 
-  Save, RefreshCw, Wallet, TrendingUp, AlertCircle, 
-  Plus, Trash2, PiggyBank, Building2, Gamepad2, Coins 
+  Save, RefreshCw, Wallet, TrendingUp, TrendingDown, 
+  Plus, Trash2, PieChart as PieIcon, Layers, CreditCard, AlertTriangle 
 } from "lucide-react";
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } from "recharts";
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
 
-// --- CẤU HÌNH SUPABASE ---
+// --- UTILS ---
+function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
+}
+
+// Format hiển thị tiền tệ (Có ký hiệu đ)
+const formatVND = (amount: number) => 
+  new Intl.NumberFormat("vi-VN", { style: "currency", currency: "VND" }).format(amount);
+
+// Format số lượng đơn thuần (Chỉ có dấu chấm phân cách: 1.000.000)
+const formatNumberDots = (amount: number) => {
+  return new Intl.NumberFormat("vi-VN").format(amount);
+};
+
+// --- SUPABASE CONFIG ---
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-// --- KIỂU DỮ LIỆU ---
+// --- TYPES ---
 interface Item {
   id: number;
   name: string;
   amount: number;
+}
+
+interface Allocation {
+  living: number;
+  invest: number;
+  savings: number;
+  play: number;
 }
 
 interface FinanceData {
@@ -25,22 +49,24 @@ interface FinanceData {
   salary: number;
   other_income: number;
   fixed_expenses: Item[];
+  allocation_settings: Allocation;
 }
 
 export default function Home() {
   const [loading, setLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   
-  // State quản lý dữ liệu
+  // State mặc định
   const [data, setData] = useState<FinanceData>({
     cash: 0,
     bank_accounts: [],
     salary: 0,
     other_income: 0,
     fixed_expenses: [],
+    allocation_settings: { living: 40, invest: 30, savings: 20, play: 10 }
   });
 
-  // --- LOAD DATA ---
+  // --- DATA FETCHING ---
   useEffect(() => {
     fetchData();
   }, []);
@@ -53,50 +79,32 @@ export default function Home() {
       .eq("user_identifier", "default_user")
       .single();
 
-    if (error) {
-      console.error("Lỗi tải dữ liệu:", error);
-    } else if (dbData) {
+    if (!error && dbData) {
       setData({
         cash: dbData.cash || 0,
-        bank_accounts: dbData.bank_accounts || [],
+        bank_accounts: Array.isArray(dbData.bank_accounts) ? dbData.bank_accounts : [],
         salary: dbData.salary || 0,
         other_income: dbData.other_income || 0,
-        fixed_expenses: dbData.fixed_expenses || [],
+        fixed_expenses: Array.isArray(dbData.fixed_expenses) ? dbData.fixed_expenses : [],
+        allocation_settings: dbData.allocation_settings || { living: 40, invest: 30, savings: 20, play: 10 }
       });
     }
     setLoading(false);
   };
 
-  // --- SAVE DATA ---
   const handleSave = async () => {
     setIsSaving(true);
-    const { error } = await supabase
-      .from("finance_tracker")
-      .update({
-        cash: data.cash,
-        salary: data.salary,
-        other_income: data.other_income,
-        bank_accounts: data.bank_accounts,
-        fixed_expenses: data.fixed_expenses,
-        updated_at: new Date(),
-      })
-      .eq("user_identifier", "default_user");
-
-    if (error) {
-      alert("Lỗi khi lưu!");
-      console.error(error);
-    } 
-    // Giả lập delay một chút cho mượt
-    setTimeout(() => setIsSaving(false), 500);
+    await supabase.from("finance_tracker").update({
+      ...data,
+      updated_at: new Date(),
+    }).eq("user_identifier", "default_user");
+    setTimeout(() => setIsSaving(false), 800);
   };
 
-  // --- XỬ LÝ NHẬP LIỆU CƠ BẢN ---
-  const handleBasicChange = (field: keyof FinanceData, value: number) => {
-    setData(prev => ({ ...prev, [field]: value }));
-  };
-
-  // --- XỬ LÝ DANH SÁCH ĐỘNG (NGÂN HÀNG / CHI PHÍ) ---
-  const updateItem = (field: 'bank_accounts' | 'fixed_expenses', id: number, key: 'name' | 'amount', value: any) => {
+  // --- LOGIC UPDATE ---
+  const handleBasicChange = (field: keyof FinanceData, value: number) => setData(prev => ({ ...prev, [field]: value }));
+  
+  const updateList = (field: 'bank_accounts' | 'fixed_expenses', id: number, key: 'name' | 'amount', value: any) => {
     setData(prev => ({
       ...prev,
       [field]: prev[field].map(item => item.id === id ? { ...item, [key]: value } : item)
@@ -104,7 +112,7 @@ export default function Home() {
   };
 
   const addItem = (field: 'bank_accounts' | 'fixed_expenses') => {
-    const newItem: Item = { id: Date.now(), name: field === 'bank_accounts' ? 'Ngân hàng mới' : 'Khoản chi mới', amount: 0 };
+    const newItem: Item = { id: Date.now(), name: field === 'bank_accounts' ? 'NH Mới' : 'Khoản chi mới', amount: 0 };
     setData(prev => ({ ...prev, [field]: [...prev[field], newItem] }));
   };
 
@@ -112,281 +120,289 @@ export default function Home() {
     setData(prev => ({ ...prev, [field]: prev[field].filter(item => item.id !== id) }));
   };
 
-  // --- TÍNH TOÁN TỔNG ---
-  const totalBank = data.bank_accounts.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  const updateAllocation = (key: keyof Allocation, value: number) => {
+    setData(prev => ({
+      ...prev,
+      allocation_settings: { ...prev.allocation_settings, [key]: value }
+    }));
+  };
+
+  // Calculations
+  const totalBank = data.bank_accounts.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
   const totalAssets = (Number(data.cash) || 0) + totalBank;
-  
   const totalIncome = (Number(data.salary) || 0) + (Number(data.other_income) || 0);
-  const totalExpense = data.fixed_expenses.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
-  
+  const totalExpense = data.fixed_expenses.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
   const remaining = totalIncome - totalExpense;
-
-  // --- PHÂN BỔ GIỎ (Trên số dư) ---
   const safeRemaining = remaining > 0 ? remaining : 0;
-  const jarLiving = safeRemaining * 0.4;
-  const jarInvest = safeRemaining * 0.3;
-  const jarSavings = safeRemaining * 0.2;
-  const jarPlay = safeRemaining * 0.1;
 
-  const formatVND = (amount: number) => new Intl.NumberFormat("vi-VN", { style: "currency", currency: "VND" }).format(amount);
+  // Allocation Logic
+  const alloc = data.allocation_settings;
+  const totalPercent = alloc.living + alloc.invest + alloc.savings + alloc.play;
+  
+  const allocationData = [
+    { name: "Sinh hoạt", key: "living", value: safeRemaining * (alloc.living / 100), percent: alloc.living, color: "#3b82f6" }, 
+    { name: "Đầu tư", key: "invest", value: safeRemaining * (alloc.invest / 100), percent: alloc.invest, color: "#10b981" },    
+    { name: "Tiết kiệm", key: "savings", value: safeRemaining * (alloc.savings / 100), percent: alloc.savings, color: "#f59e0b" }, 
+    { name: "Giải trí", key: "play", value: safeRemaining * (alloc.play / 100), percent: alloc.play, color: "#8b5cf6" }, 
+  ];
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans pb-20">
+    <div className="min-h-screen bg-[#0f172a] text-slate-200 font-sans selection:bg-blue-500/30">
       
-      {/* HEADER */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex justify-between items-center">
-          <div className="flex items-center gap-2">
-            <div className="bg-blue-600 p-2 rounded-lg text-white">
-              <Coins size={24} />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold text-slate-900">Finance Dashboard</h1>
-              <p className="text-xs text-slate-500 hidden sm:block">Quản lý dòng tiền cá nhân</p>
-            </div>
-          </div>
-          
+      {/* --- NAVBAR --- */}
+      <nav className="border-b border-slate-800 bg-[#0f172a]/80 backdrop-blur-md sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-6 h-16 flex justify-between items-center">
           <div className="flex items-center gap-3">
-            <button onClick={fetchData} className="p-2 text-slate-500 hover:bg-slate-100 rounded-full transition" title="Làm mới">
+            <div className="w-8 h-8 bg-gradient-to-tr from-blue-600 to-cyan-400 rounded-lg flex items-center justify-center shadow-lg shadow-blue-500/20">
+              <Layers size={18} className="text-white" />
+            </div>
+            <span className="font-bold text-lg tracking-tight text-white">FinTrack Pro</span>
+          </div>
+          <div className="flex gap-3">
+            <button onClick={fetchData} className="p-2 hover:bg-slate-800 rounded-full transition-colors text-slate-400 hover:text-white">
               <RefreshCw size={20} className={loading ? "animate-spin" : ""} />
             </button>
             <button 
-              onClick={handleSave} 
+              onClick={handleSave}
               disabled={isSaving}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-white transition shadow-sm
-                ${isSaving ? 'bg-blue-400 cursor-wait' : 'bg-blue-600 hover:bg-blue-700 active:scale-95'}
-              `}
+              className={cn(
+                "flex items-center gap-2 px-5 py-2 rounded-full font-medium text-sm transition-all shadow-lg",
+                isSaving ? "bg-slate-700 text-slate-300 cursor-wait" : "bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20 hover:shadow-blue-600/40"
+              )}
             >
-              <Save size={18} /> {isSaving ? "Đang lưu..." : "Lưu dữ liệu"}
+              <Save size={16} /> {isSaving ? "Đang lưu..." : "Lưu Thay Đổi"}
             </button>
           </div>
         </div>
-      </header>
+      </nav>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      {/* --- MAIN CONTENT --- */}
+      <main className="max-w-7xl mx-auto px-6 py-8 space-y-8">
         
-        {/* GRID LAYOUT: 12 Columns */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* OVERVIEW CARDS */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="bg-slate-800/50 border border-slate-700/50 p-6 rounded-2xl relative overflow-hidden group">
+            <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity"><Wallet size={80} /></div>
+            <p className="text-slate-400 text-sm font-medium mb-1 flex items-center gap-2"><Wallet size={16} className="text-blue-400" /> Tổng Tài Sản</p>
+            {/* Sử dụng font-mono cho số liệu */}
+            <h2 className="text-3xl font-bold text-white tracking-tight font-mono">{formatVND(totalAssets)}</h2>
+            <div className="mt-4 flex gap-2 text-xs">
+              <span className="px-2 py-1 bg-slate-700/50 rounded text-slate-300 font-mono">Tiền mặt: {formatNumberDots(data.cash)}</span>
+              <span className="px-2 py-1 bg-slate-700/50 rounded text-slate-300 font-mono">Bank: {formatNumberDots(totalBank)}</span>
+            </div>
+          </div>
+
+          <div className="bg-slate-800/50 border border-slate-700/50 p-6 rounded-2xl relative overflow-hidden">
+            <p className="text-slate-400 text-sm font-medium mb-1 flex items-center gap-2"><TrendingUp size={16} className="text-green-400" /> Dòng Tiền (Net Cashflow)</p>
+            <h2 className={cn("text-3xl font-bold tracking-tight font-mono", remaining >= 0 ? "text-green-400" : "text-red-400")}>
+              {remaining > 0 ? "+" : ""}{formatVND(remaining)}
+            </h2>
+            <p className="text-xs text-slate-500 mt-2">Số tiền khả dụng sau chi phí</p>
+          </div>
+
+          <div className="bg-slate-800/50 border border-slate-700/50 p-6 rounded-2xl relative overflow-hidden">
+             <p className="text-slate-400 text-sm font-medium mb-1 flex items-center gap-2"><TrendingDown size={16} className="text-red-400" /> Chi Cố Định</p>
+            <h2 className="text-3xl font-bold text-white tracking-tight font-mono">{formatVND(totalExpense)}</h2>
+            <div className="w-full bg-slate-700 h-1.5 mt-4 rounded-full overflow-hidden">
+              <div className="bg-red-500 h-full rounded-full" style={{ width: `${Math.min((totalExpense / (totalIncome || 1)) * 100, 100)}%` }} />
+            </div>
+            <p className="text-xs text-slate-500 mt-2 text-right font-mono">Chiếm {Math.round((totalExpense / (totalIncome || 1)) * 100)}% Thu nhập</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           
-          {/* CỘT 1: TÀI SẢN (Chiếm 4 phần) */}
-          <div className="lg:col-span-4 space-y-6">
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-              <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
-                <h2 className="font-bold text-slate-700 flex items-center gap-2">
-                  <Wallet className="text-blue-500" size={20} /> Tài Sản Hiện Có
-                </h2>
-                <span className="text-blue-600 font-bold">{formatVND(totalAssets)}</span>
+          {/* LEFT: INPUTS (7 Cols) */}
+          <div className="lg:col-span-7 space-y-6">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+              <div className="bg-slate-800/50 px-6 py-4 border-b border-slate-800 flex justify-between items-center">
+                <h3 className="font-semibold text-slate-200">Quản Lý Tài Sản</h3>
+                <button onClick={() => addItem('bank_accounts')} className="text-xs bg-blue-600/20 text-blue-400 px-3 py-1.5 rounded-full hover:bg-blue-600 hover:text-white transition flex items-center gap-1"><Plus size={14} /> Thêm NH</button>
               </div>
-              
-              <div className="p-5 space-y-4">
-                {/* Tiền mặt */}
-                <div>
-                  <label className="text-xs font-semibold text-slate-500 uppercase">Tiền mặt</label>
-                  <input 
-                    type="number" 
-                    value={data.cash}
-                    onChange={(e) => handleBasicChange('cash', Number(e.target.value))}
-                    className="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-lg font-mono text-lg focus:ring-2 focus:ring-blue-500 outline-none transition"
-                  />
-                </div>
-
-                {/* Danh sách Ngân hàng */}
-                <div>
-                  <div className="flex justify-between items-end mb-2">
-                    <label className="text-xs font-semibold text-slate-500 uppercase">Tài khoản ngân hàng</label>
-                    <button onClick={() => addItem('bank_accounts')} className="text-xs flex items-center gap-1 text-blue-600 hover:underline">
-                      <Plus size={14} /> Thêm bank
-                    </button>
-                  </div>
-                  
-                  <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1 custom-scrollbar">
-                    {data.bank_accounts.map((item) => (
-                      <div key={item.id} className="flex gap-2 items-center group">
-                        <input 
-                          type="text" 
-                          value={item.name}
-                          onChange={(e) => updateItem('bank_accounts', item.id, 'name', e.target.value)}
-                          className="w-1/3 p-2 text-sm bg-white border border-slate-200 rounded-md focus:border-blue-500 outline-none"
-                          placeholder="Tên NH"
-                        />
-                        <input 
-                          type="number" 
-                          value={item.amount}
-                          onChange={(e) => updateItem('bank_accounts', item.id, 'amount', Number(e.target.value))}
-                          className="flex-1 p-2 text-sm font-mono bg-white border border-slate-200 rounded-md focus:border-blue-500 outline-none text-right"
-                        />
-                        <button 
-                          onClick={() => removeItem('bank_accounts', item.id)}
-                          className="p-2 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* CỘT 2: THU & CHI (Chiếm 4 phần) */}
-          <div className="lg:col-span-4 space-y-6">
-            
-            {/* Thu Nhập */}
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200">
-              <div className="p-4 border-b border-slate-100 bg-green-50/50 flex justify-between items-center">
-                <h2 className="font-bold text-green-800 flex items-center gap-2">
-                  <TrendingUp className="text-green-600" size={20} /> Thu Nhập
-                </h2>
-                <span className="text-green-700 font-bold">{formatVND(totalIncome)}</span>
-              </div>
-              <div className="p-5 space-y-3">
-                <div className="grid grid-cols-2 gap-3">
-                   <div>
-                      <label className="text-xs font-semibold text-slate-400">Lương cứng</label>
-                      <input 
-                        type="number" value={data.salary} 
-                        onChange={(e) => handleBasicChange('salary', Number(e.target.value))}
-                        className="w-full p-2 border rounded-md text-right font-mono" 
-                      />
-                   </div>
-                   <div>
-                      <label className="text-xs font-semibold text-slate-400">Thu nhập khác</label>
-                      <input 
-                        type="number" value={data.other_income} 
-                        onChange={(e) => handleBasicChange('other_income', Number(e.target.value))}
-                        className="w-full p-2 border rounded-md text-right font-mono" 
+              <div className="p-6 space-y-4">
+                <div className="flex items-center gap-4 bg-slate-800/30 p-3 rounded-xl border border-slate-800/50">
+                   <div className="p-3 bg-green-500/10 rounded-lg text-green-500"><Wallet size={20} /></div>
+                   <div className="flex-1">
+                      <label className="text-xs text-slate-500 font-medium uppercase">Tiền mặt thực tế</label>
+                      {/* Dùng Component nhập liệu thông minh */}
+                      <MoneyInput 
+                        value={data.cash} 
+                        onChange={val => handleBasicChange('cash', val)} 
+                        className="text-lg"
                       />
                    </div>
                 </div>
-              </div>
-            </div>
-
-            {/* Chi Phí Cố Định */}
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 flex-1">
-              <div className="p-4 border-b border-slate-100 bg-red-50/50 flex justify-between items-center">
-                <h2 className="font-bold text-red-800 flex items-center gap-2">
-                  <AlertCircle className="text-red-600" size={20} /> Chi Cố Định
-                </h2>
-                <span className="text-red-700 font-bold">{formatVND(totalExpense)}</span>
-              </div>
-              
-              <div className="p-5">
-                 <div className="flex justify-between items-end mb-2">
-                    <label className="text-xs font-semibold text-slate-500 uppercase">Danh sách khoản chi</label>
-                    <button onClick={() => addItem('fixed_expenses')} className="text-xs flex items-center gap-1 text-red-600 hover:underline">
-                      <Plus size={14} /> Thêm khoản chi
-                    </button>
-                  </div>
-
-                  <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1 custom-scrollbar">
-                    {data.fixed_expenses.map((item) => (
-                      <div key={item.id} className="flex gap-2 items-center group">
-                        <input 
-                          type="text" 
-                          value={item.name}
-                          onChange={(e) => updateItem('fixed_expenses', item.id, 'name', e.target.value)}
-                          className="w-1/3 p-2 text-sm bg-white border border-slate-200 rounded-md focus:border-red-500 outline-none"
-                          placeholder="Khoản chi..."
-                        />
-                        <input 
-                          type="number" 
-                          value={item.amount}
-                          onChange={(e) => updateItem('fixed_expenses', item.id, 'amount', Number(e.target.value))}
-                          className="flex-1 p-2 text-sm font-mono bg-white border border-slate-200 rounded-md focus:border-red-500 outline-none text-right"
-                        />
-                        <button 
-                          onClick={() => removeItem('fixed_expenses', item.id)}
-                          className="p-2 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition"
-                        >
-                          <Trash2 size={16} />
-                        </button>
+                <div className="space-y-3">
+                   {data.bank_accounts.map(bank => (
+                      <div key={bank.id} className="group flex items-center gap-3 bg-slate-800/30 p-3 rounded-xl border border-slate-800/50 hover:border-slate-700 transition">
+                        <div className="p-3 bg-blue-500/10 rounded-lg text-blue-500"><CreditCard size={20} /></div>
+                        <div className="flex-1">
+                          <input className="w-full bg-transparent text-sm font-medium text-slate-300 outline-none focus:text-blue-400 mb-1" value={bank.name} onChange={e => updateList('bank_accounts', bank.id, 'name', e.target.value)} placeholder="Tên ngân hàng" />
+                           {/* Dùng Component nhập liệu thông minh */}
+                           <MoneyInput 
+                            value={bank.amount} 
+                            onChange={val => updateList('bank_accounts', bank.id, 'amount', val)} 
+                          />
+                        </div>
+                        <button onClick={() => removeItem('bank_accounts', bank.id)} className="p-2 text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition"><Trash2 size={18} /></button>
                       </div>
-                    ))}
-                  </div>
+                   ))}
+                </div>
               </div>
             </div>
 
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+               <div className="bg-slate-800/50 px-6 py-4 border-b border-slate-800 flex justify-between items-center">
+                <h3 className="font-semibold text-slate-200">Thu & Chi</h3>
+                <button onClick={() => addItem('fixed_expenses')} className="text-xs bg-red-600/20 text-red-400 px-3 py-1.5 rounded-full hover:bg-red-600 hover:text-white transition flex items-center gap-1"><Plus size={14} /> Thêm Chi Phí</button>
+              </div>
+              <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-8">
+                 <div className="space-y-4">
+                    <label className="text-xs text-slate-500 font-bold uppercase tracking-wider">Nguồn thu nhập</label>
+                    <div className="space-y-3">
+                       <InputCard label="Lương cứng" value={data.salary} onChange={v => handleBasicChange('salary', v)} />
+                       <InputCard label="Thu nhập khác" value={data.other_income} onChange={v => handleBasicChange('other_income', v)} />
+                    </div>
+                 </div>
+                 <div className="space-y-4">
+                    <label className="text-xs text-slate-500 font-bold uppercase tracking-wider">Chi cố định tháng</label>
+                    <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                       {data.fixed_expenses.map(item => (
+                          <div key={item.id} className="flex items-center gap-2 bg-slate-800/30 p-2 rounded-lg border border-slate-800 group hover:border-red-500/30 transition">
+                             <input className="w-1/2 bg-transparent text-sm text-slate-300 outline-none" value={item.name} onChange={e => updateList('fixed_expenses', item.id, 'name', e.target.value)} placeholder="Khoản chi..." />
+                             
+                             {/* Dùng Component nhập liệu thông minh */}
+                             <div className="w-1/2">
+                                <MoneyInput 
+                                  value={item.amount} 
+                                  onChange={val => updateList('fixed_expenses', item.id, 'amount', val)} 
+                                  className="text-right text-sm"
+                                />
+                             </div>
+                             
+                             <button onClick={() => removeItem('fixed_expenses', item.id)} className="text-slate-600 hover:text-red-500 opacity-0 group-hover:opacity-100"><Trash2 size={14} /></button>
+                          </div>
+                       ))}
+                    </div>
+                 </div>
+              </div>
+            </div>
           </div>
 
-          {/* CỘT 3: TỔNG KẾT & PHÂN BỔ (Chiếm 4 phần) */}
-          <div className="lg:col-span-4 space-y-6">
-            
-            {/* Card Tổng Kết */}
-            <div className="bg-slate-900 text-white rounded-xl shadow-lg p-6 relative overflow-hidden">
-              <div className="absolute top-0 right-0 p-4 opacity-10">
-                <Coins size={100} />
-              </div>
-              <p className="text-slate-400 text-sm font-medium mb-1">DÒNG TIỀN DƯ (Cashflow)</p>
-              <div className={`text-4xl font-bold mb-4 ${remaining >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                {formatVND(remaining)}
+          {/* RIGHT: ALLOCATION (5 Cols) */}
+          <div className="lg:col-span-5 space-y-6">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl sticky top-24">
+              <div className="flex justify-between items-start mb-6">
+                 <div>
+                    <h3 className="font-semibold text-slate-200 flex items-center gap-2">
+                      <PieIcon size={18} className="text-purple-400" /> Phân Bổ Dòng Tiền
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-1">Tự chỉnh tỷ lệ % theo ý muốn</p>
+                 </div>
+                 <div className={cn("px-3 py-1 rounded-full text-xs font-bold border", totalPercent === 100 ? "bg-green-500/10 text-green-400 border-green-500/20" : "bg-yellow-500/10 text-yellow-400 border-yellow-500/20")}>
+                    Tổng: {totalPercent}%
+                 </div>
               </div>
               
-              <div className="h-1 w-full bg-slate-700 rounded-full mb-4">
-                 <div 
-                  className="h-1 bg-green-500 rounded-full transition-all duration-500" 
-                  style={{ width: totalIncome > 0 ? `${(remaining/totalIncome)*100}%` : '0%' }}
-                 ></div>
+              <div className="h-[220px] w-full relative">
+                {safeRemaining > 0 ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={allocationData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
+                        {allocationData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} stroke="none" />)}
+                      </Pie>
+                      <RechartsTooltip 
+                        formatter={(value: any) => formatVND(value)} 
+                        contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155', color: '#fff' }} 
+                        itemStyle={{ color: '#fff', fontFamily: 'monospace' }} 
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center text-slate-600 text-sm">Chưa có dòng tiền dương</div>
+                )}
+                <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                   <span className="text-xs text-slate-500">Dư</span>
+                   <span className="font-bold text-white text-lg font-mono">{formatVND(safeRemaining)}</span>
+                </div>
               </div>
-              <p className="text-xs text-slate-400">
-                *Số tiền này đã trừ hết chi phí cố định, sẵn sàng để phân bổ.
-              </p>
-            </div>
 
-            {/* Card Phân Bổ */}
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-              <h3 className="font-bold text-slate-700 mb-4 border-b pb-2">Kế Hoạch Phân Bổ</h3>
-              <div className="grid grid-cols-1 gap-4">
-                
-                <JarRow 
-                  icon={<Wallet className="text-yellow-500" />} 
-                  color="bg-yellow-100 text-yellow-700"
-                  label="Sinh hoạt phí (40%)" 
-                  value={jarLiving} 
-                />
-                <JarRow 
-                  icon={<Building2 className="text-blue-500" />} 
-                  color="bg-blue-100 text-blue-700"
-                  label="Đầu tư (30%)" 
-                  value={jarInvest} 
-                />
-                <JarRow 
-                  icon={<PiggyBank className="text-pink-500" />} 
-                  color="bg-pink-100 text-pink-700"
-                  label="Tiết kiệm (20%)" 
-                  value={jarSavings} 
-                />
-                <JarRow 
-                  icon={<Gamepad2 className="text-purple-500" />} 
-                  color="bg-purple-100 text-purple-700"
-                  label="Giải trí (10%)" 
-                  value={jarPlay} 
-                />
-
+              {/* LEGEND */}
+              <div className="mt-6 space-y-3">
+                 {allocationData.map((item) => (
+                    <div key={item.key} className="flex items-center justify-between p-2 rounded-lg hover:bg-slate-800/50 transition border border-transparent hover:border-slate-700">
+                       <div className="flex items-center gap-3">
+                          <div className="w-3 h-3 rounded-full shadow-[0_0_8px]" style={{ backgroundColor: item.color, boxShadow: `0 0 8px ${item.color}` }}></div>
+                          <span className="text-sm text-slate-300 font-medium w-20">{item.name}</span>
+                          <div className="relative group">
+                            <input 
+                              type="number"
+                              value={item.percent}
+                              onChange={(e) => updateAllocation(item.key as keyof Allocation, Number(e.target.value))}
+                              className="w-12 text-center bg-slate-800 border border-slate-700 rounded text-xs font-bold text-white focus:border-blue-500 outline-none p-1 font-mono"
+                            />
+                            <span className="absolute -right-3 top-1 text-xs text-slate-500">%</span>
+                          </div>
+                       </div>
+                       <div className="text-right">
+                          <div className="text-sm font-bold text-white font-mono">{formatVND(item.value)}</div>
+                       </div>
+                    </div>
+                 ))}
               </div>
-            </div>
 
+              {totalPercent !== 100 && (
+                 <div className="mt-4 p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg flex items-center gap-2">
+                    <AlertTriangle size={16} className="text-yellow-500" />
+                    <span className="text-xs text-yellow-200">Tổng tỷ lệ: <strong>{totalPercent}%</strong>. Hãy chỉnh về 100%.</span>
+                 </div>
+              )}
+            </div>
           </div>
-
         </div>
       </main>
     </div>
   );
 }
 
-// Sub-component cho dòng phân bổ
-function JarRow({ icon, label, value, color }: { icon: any, label: string, value: number, color: string }) {
+// --- NEW COMPONENT: MONEY INPUT (Tự động thêm dấu chấm) ---
+function MoneyInput({ value, onChange, className }: { value: number, onChange: (val: number) => void, className?: string }) {
+  // Hàm xử lý khi user nhập
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    // 1. Lấy giá trị raw từ input (vd: "1.000a")
+    const rawValue = e.target.value;
+    
+    // 2. Xóa hết các ký tự không phải số (giữ lại số 0-9)
+    const cleanValue = rawValue.replace(/[^0-9]/g, '');
+
+    // 3. Trả về số cho Parent Component update state
+    onChange(Number(cleanValue));
+  };
+
   return (
-    <div className="flex items-center justify-between p-3 rounded-lg hover:bg-slate-50 transition border border-transparent hover:border-slate-200">
-      <div className="flex items-center gap-3">
-        <div className={`p-2 rounded-lg ${color}`}>
-          {icon}
-        </div>
-        <span className="text-sm font-medium text-slate-600">{label}</span>
-      </div>
-      <span className="font-bold text-slate-800 font-mono">
-        {new Intl.NumberFormat("vi-VN").format(value)} đ
-      </span>
-    </div>
+    <input
+      type="text" // Dùng type text để có thể hiển thị dấu chấm
+      value={value === 0 ? '' : formatNumberDots(value)} // Nếu 0 thì để trống cho đẹp, khác 0 thì format
+      onChange={handleChange}
+      className={cn(
+        "w-full bg-transparent text-white font-mono font-bold outline-none placeholder-slate-600",
+        className
+      )}
+      placeholder="0"
+    />
   );
+}
+
+// --- COMPONENT: INPUT CARD ---
+function InputCard({ label, value, onChange }: { label: string, value: number, onChange: (val: number) => void }) {
+   return (
+      <div className="bg-slate-800/30 rounded-xl p-3 border border-slate-800 hover:border-slate-700 transition">
+         <label className="text-xs text-slate-500 block mb-1">{label}</label>
+         <MoneyInput 
+            value={value} 
+            onChange={onChange} 
+            className="text-lg"
+         />
+      </div>
+   )
 }
